@@ -4,47 +4,101 @@ import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [mode, setMode] = useState('tx'); // ó RX
+  const [protocol, setProtocol] = useState('tcp'); // ó UDP
+  const [files, setFiles] = useState([]);
+  const [log, setLog] = useState('');
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  // Manejador para el cambio de archivos
+  const handleFileChange = (e) => {
+    if (e.target.files) {
+      setFiles(Array.from(e.target.files));
+    }
+  };
+
+  // Manejador para el inicio de la transferencia
+  const handleStartTransfer = async () => {
+    try {
+      const filePaths = files.map(file => file.path); // Asegúrate de que tu sistema de archivos de Tauri pueda acceder a estas rutas
+      const result = await invoke('start_transfer', {
+        mode,
+        protocol,
+        files: filePaths,
+      });
+      setLog(result);
+    } catch (error) {
+      setLog(`Error: ${error}`);
+    }
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="container">
+      <h1>Tauri File Transfer</h1>
+      <p>{log}</p>
 
-      <div className="row">
-        <a href="https://vitejs.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://reactjs.org" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+      {/* Selector de modo */}
+      <div>
+        <label>
+          <input
+            type="radio"
+            name="mode"
+            value="tx"
+            checked={mode === 'tx'}
+            onChange={() => setMode('tx')}
+          />
+          Transmisor (Tx)
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="mode"
+            value="rx"
+            checked={mode === 'rx'}
+            onChange={() => setMode('rx')}
+          />
+          Receptor (Rx)
+        </label>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      {/* Selector de protocolo */}
+      <div>
+        <label>
+          <input
+            type="radio"
+            name="protocol"
+            value="tcp"
+            checked={protocol === 'tcp'}
+            onChange={() => setProtocol('tcp')}
+          />
+          TCP
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="protocol"
+            value="udp"
+            checked={protocol === 'udp'}
+            onChange={() => setProtocol('udp')}
+          />
+          UDP
+        </label>
+      </div>
+
+      {/* Subida de archivos */}
+      {mode === 'tx' && (
+        <div>
+          <h3>Seleccionar Archivos</h3>
+          <input type="file" multiple onChange={handleFileChange} />
+          <ul>
+            {files.map((file) => (
+              <li key={file.name}>{file.name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <button onClick={handleStartTransfer}>Iniciar Transferencia</button>
+    </div>
   );
 }
 
