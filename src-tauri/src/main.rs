@@ -18,10 +18,21 @@ async fn start_transfer(args: TransferArgs) -> Result<String, String> {
 
     Ok(format!("Transferencia iniciada en modo {} con protocolo {}. Archivos: {:?}", args.mode, args.protocol, args.files))
 }
+use ping::ping;
+use std::net::IpAddr;
+
+#[tauri::command]
+fn ping_ip(ip: String) -> Result<String, String> {
+    let ip_addr: IpAddr = ip.parse().map_err(|e| format!("IP inválida: {}", e))?;
+    match ping(ip_addr, None, None, None, None, None) {
+        Ok(response) => Ok(format!("Ping exitoso: {:?}", response)),
+        Err(e) => Err(format!("Error: {:?}", e)),
+    }
+}
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![start_transfer])
+        .invoke_handler(tauri::generate_handler![start_transfer, ping_ip])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
