@@ -36,50 +36,66 @@ fn start_receiver(save_path: String) -> Result<String, String> {
                             continue;
                         }
                     }
-                    // Leer el nombre del archivo primero (enviar desde el transmisor)
-                    let mut name_len_buf = [0u8; 2];
-                    if let Err(e) = s.read_exact(&mut name_len_buf) {
-                        println!("[RECEIVER] Error leyendo longitud de nombre: {}", e);
-                        continue;
-                    }
-                    let name_len = u16::from_be_bytes(name_len_buf) as usize;
-                    let mut name_buf = vec![0u8; name_len];
-                    if let Err(e) = s.read_exact(&mut name_buf) {
-                        println!("[RECEIVER] Error leyendo nombre de archivo: {}", e);
-                        continue;
-                    }
-                    let file_name = match String::from_utf8(name_buf) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            println!("[RECEIVER] Nombre de archivo inválido: {}", e);
-                            continue;
-                        }
-                    };
-                    let file_path = Path::new(&save_path).join(&file_name);
-                    let mut file = match std::fs::File::create(&file_path) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            println!("[RECEIVER] No se pudo crear el archivo: {}", e);
-                            continue;
-                        }
-                    };
-                    let mut buffer = [0u8; 4096];
+                    // Recibir múltiples archivos en la misma conexión
                     loop {
-                        match s.read(&mut buffer) {
-                            Ok(0) => break, // Fin de transmisión
-                            Ok(n) => {
-                                if let Err(e) = file.write_all(&buffer[..n]) {
-                                    println!("[RECEIVER] Error escribiendo archivo: {}", e);
-                                    break;
-                                }
-                            },
-                            Err(e) => {
-                                println!("[RECEIVER] Error leyendo: {}", e);
+                        // Leer longitud del nombre (2 bytes)
+                        let mut name_len_buf = [0u8; 2];
+                        if let Err(e) = s.read_exact(&mut name_len_buf) {
+                            // Si no hay más datos, salir del bucle
+                            if e.kind() == std::io::ErrorKind::UnexpectedEof {
                                 break;
                             }
+                            println!("[RECEIVER] Error leyendo longitud de nombre: {}", e);
+                            break;
                         }
+                        let name_len = u16::from_be_bytes(name_len_buf) as usize;
+                        let mut name_buf = vec![0u8; name_len];
+                        if let Err(e) = s.read_exact(&mut name_buf) {
+                            println!("[RECEIVER] Error leyendo nombre de archivo: {}", e);
+                            break;
+                        }
+                        let file_name = match String::from_utf8(name_buf) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                println!("[RECEIVER] Nombre de archivo inválido: {}", e);
+                                break;
+                            }
+                        };
+                        // Leer tamaño del archivo (8 bytes)
+                        let mut size_buf = [0u8; 8];
+                        if let Err(e) = s.read_exact(&mut size_buf) {
+                            println!("[RECEIVER] Error leyendo tamaño de archivo: {}", e);
+                            break;
+                        }
+                        let file_size = u64::from_be_bytes(size_buf);
+                        let file_path = Path::new(&save_path).join(&file_name);
+                        let mut file = match std::fs::File::create(&file_path) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                println!("[RECEIVER] No se pudo crear el archivo: {}", e);
+                                break;
+                            }
+                        };
+                        let mut bytes_left = file_size;
+                        let mut buffer = [0u8; 4096];
+                        while bytes_left > 0 {
+                            let to_read = std::cmp::min(buffer.len() as u64, bytes_left) as usize;
+                            match s.read_exact(&mut buffer[..to_read]) {
+                                Ok(()) => {
+                                    if let Err(e) = file.write_all(&buffer[..to_read]) {
+                                        println!("[RECEIVER] Error escribiendo archivo: {}", e);
+                                        break;
+                                    }
+                                    bytes_left -= to_read as u64;
+                                },
+                                Err(e) => {
+                                    println!("[RECEIVER] Error leyendo datos de archivo: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        println!("[RECEIVER] Archivo guardado en {:?}", file_path);
                     }
-                    println!("[RECEIVER] Archivo guardado en {:?}", file_path);
                 },
                 Err(e) => println!("[RECEIVER] Error de conexión: {}", e),
             }
