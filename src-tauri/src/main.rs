@@ -116,7 +116,7 @@ async fn start_transfer(args: TransferArgs) -> Result<String, String> {
     }
     println!("  ]");
 
-    // Solo soporta TCP por ahora y solo el primer archivo
+    // Solo soporta TCP por ahora y todos los archivos
     if args.files.is_empty() {
         return Err("No se proporcionaron archivos".into());
     }
@@ -124,31 +124,35 @@ async fn start_transfer(args: TransferArgs) -> Result<String, String> {
         return Err("Por ahora solo se soporta TCP".into());
     }
 
-    let file = &args.files[0];
     let ip = &args.ip;
     let port = 4000; // Puerto fijo para ejemplo
     let addr = format!("{}:{}", ip, port);
 
     use std::io::Write;
     use std::net::TcpStream;
-    let file_bytes = match base64::decode(&file.content_base64) {
-        Ok(b) => b.to_vec(),
-        Err(e) => return Err(format!("No se pudo decodificar el archivo base64: {}", e)),
-    };
-
-    // Enviar primero la longitud del nombre de archivo (2 bytes, big endian), luego el nombre, luego el archivo
-    let file_name_bytes = file.name.as_bytes();
-    let name_len = file_name_bytes.len();
-    if name_len > u16::MAX as usize {
-        return Err("Nombre de archivo demasiado largo".to_string());
-    }
     let mut stream = TcpStream::connect(&addr).map_err(|e| format!("No se pudo conectar a {}: {}", addr, e))?;
-    let name_len_bytes = (name_len as u16).to_be_bytes();
-    stream.write_all(&name_len_bytes).map_err(|e| format!("Error enviando longitud de nombre: {}", e))?;
-    stream.write_all(file_name_bytes).map_err(|e| format!("Error enviando nombre de archivo: {}", e))?;
-    stream.write_all(&file_bytes).map_err(|e| format!("Error enviando datos: {}", e))?;
 
-    Ok(format!("Archivo '{}' enviado correctamente a {}", file.name, addr))
+    for file in &args.files {
+        let file_bytes = match base64::decode(&file.content_base64) {
+            Ok(b) => b.to_vec(),
+            Err(e) => return Err(format!("No se pudo decodificar el archivo base64: {}", e)),
+        };
+        // Enviar primero la longitud del nombre de archivo (2 bytes, big endian), luego el nombre, luego el tamaño (8 bytes), luego el archivo
+        let file_name_bytes = file.name.as_bytes();
+        let name_len = file_name_bytes.len();
+        if name_len > u16::MAX as usize {
+            return Err("Nombre de archivo demasiado largo".to_string());
+        }
+        let name_len_bytes = (name_len as u16).to_be_bytes();
+        let file_size_bytes = (file_bytes.len() as u64).to_be_bytes();
+        stream.write_all(&name_len_bytes).map_err(|e| format!("Error enviando longitud de nombre: {}", e))?;
+        stream.write_all(file_name_bytes).map_err(|e| format!("Error enviando nombre de archivo: {}", e))?;
+        stream.write_all(&file_size_bytes).map_err(|e| format!("Error enviando tamaño de archivo: {}", e))?;
+        stream.write_all(&file_bytes).map_err(|e| format!("Error enviando datos: {}", e))?;
+        println!("[DEBUG] Archivo '{}' enviado ({} bytes)", file.name, file_bytes.len());
+    }
+
+    Ok(format!("{} archivo(s) enviados correctamente a {}", args.files.len(), addr))
 }
 use ping::ping;
 use std::net::IpAddr;
