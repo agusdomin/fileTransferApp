@@ -1,7 +1,26 @@
 # Tauri + React
 
-This template should help get you started developing with Tauri and React in Vite.
+Tauri es un framework que sirve para crear binarios pequeños y rápidos para las principales plataformas de escritorio y móviles. Los desarrolladores pueden usar cualquier framework de frontend que compile a HTML, JavaScript y CSS para crear su experiencia de usuario, y al mismo tiempo aprovechar lenguajes como Rust, Swift y Kotlin para la lógica del backend cuando sea necesario.
 
-## Recommended IDE Setup
+### Linux.
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- Instalar librerias 
+
+```bash
+apt install libwebkit2gtk-4.1-dev \
+  build-essential \
+  curl \
+  wget \
+  file \
+  libxdo-dev \
+  libssl-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev
+```
+
+- Instalar rust
+
+```bash
+curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
+```
+- Tener node
