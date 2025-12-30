@@ -184,38 +184,97 @@ async fn start_transfer(log_state: tauri::State<'_, Mutex<LogState>>, args: Tran
 
     use std::io::Write;
     use std::net::TcpStream;
-    let mut stream = TcpStream::connect(&addr).map_err(|e| {
-        let error_msg = format!("No se pudo conectar a {}: {}", addr, e);
-        write_log(&log_state, &format!("✗ {}", error_msg));
-        error_msg
-    })?;
+    use std::time::Duration;
     
+    println!("[DEBUG] Intentando conectar a {}...", addr);
+    write_log(&log_state, &format!("Intentando conectar a {}...", addr));
+    
+    let mut stream = match TcpStream::connect_timeout(
+        &addr.parse::<std::net::SocketAddr>().map_err(|e| {
+            let error_msg = format!("Dirección inválida {}: {}", addr, e);
+            write_log(&log_state, &format!("✗ {}", error_msg));
+            println!("[DEBUG] {}", error_msg);
+            error_msg
+        })?,
+        Duration::from_secs(10)
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            let error_msg = format!("No se pudo conectar a {}: {}", addr, e);
+            write_log(&log_state, &format!("✗ {}", error_msg));
+            println!("[DEBUG] {}", error_msg);
+            return Err(error_msg);
+        }
+    };
+
+    // Configurar timeouts para operaciones de lectura/escritura
+    stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+
+    println!("[DEBUG] Conexión establecida exitosamente");
     write_log(&log_state, "✓ Conexión establecida");
 
     for file in &args.files {
+        println!("[DEBUG] Procesando archivo: {} ({} bytes base64)", file.name, file.content_base64.len());
         write_log(&log_state, &format!("Enviando archivo: {}", file.name));
+        
         let file_bytes = match base64::decode(&file.content_base64) {
-            Ok(b) => b.to_vec(),
+            Ok(b) => {
+                println!("[DEBUG] Archivo decodificado: {} bytes reales", b.len());
+                b.to_vec()
+            },
             Err(e) => {
                 let error_msg = format!("No se pudo decodificar el archivo base64: {}", e);
                 write_log(&log_state, &format!("✗ {}", error_msg));
+                println!("[DEBUG] {}", error_msg);
                 return Err(error_msg);
             },
         };
+        
         // Enviar primero la longitud del nombre de archivo (2 bytes, big endian), luego el nombre, luego el tamaño (8 bytes), luego el archivo
         let file_name_bytes = file.name.as_bytes();
         let name_len = file_name_bytes.len();
         if name_len > u16::MAX as usize {
             return Err("Nombre de archivo demasiado largo".to_string());
         }
+        
+        println!("[DEBUG] Enviando metadata del archivo...");
         let name_len_bytes = (name_len as u16).to_be_bytes();
         let file_size_bytes = (file_bytes.len() as u64).to_be_bytes();
-        stream.write_all(&name_len_bytes).map_err(|e| format!("Error enviando longitud de nombre: {}", e))?;
-        stream.write_all(file_name_bytes).map_err(|e| format!("Error enviando nombre de archivo: {}", e))?;
-        stream.write_all(&file_size_bytes).map_err(|e| format!("Error enviando tamaño de archivo: {}", e))?;
-        stream.write_all(&file_bytes).map_err(|e| format!("Error enviando datos: {}", e))?;
+        
+        stream.write_all(&name_len_bytes).map_err(|e| {
+            let error_msg = format!("Error enviando longitud de nombre: {}", e);
+            println!("[DEBUG] {}", error_msg);
+            error_msg
+        })?;
+        
+        stream.write_all(file_name_bytes).map_err(|e| {
+            let error_msg = format!("Error enviando nombre de archivo: {}", e);
+            println!("[DEBUG] {}", error_msg);
+            error_msg
+        })?;
+        
+        stream.write_all(&file_size_bytes).map_err(|e| {
+            let error_msg = format!("Error enviando tamaño de archivo: {}", e);
+            println!("[DEBUG] {}", error_msg);
+            error_msg
+        })?;
+        
+        println!("[DEBUG] Enviando datos del archivo ({} bytes)...", file_bytes.len());
+        stream.write_all(&file_bytes).map_err(|e| {
+            let error_msg = format!("Error enviando datos: {}", e);
+            println!("[DEBUG] {}", error_msg);
+            error_msg
+        })?;
+        
+        stream.flush().map_err(|e| {
+            let error_msg = format!("Error haciendo flush: {}", e);
+            println!("[DEBUG] {}", error_msg);
+            error_msg
+        })?;
+        
         write_log(&log_state, &format!("✓ Archivo '{}' enviado ({} bytes)", file.name, file_bytes.len()));
-        println!("[DEBUG] Archivo '{}' enviado ({} bytes)", file.name, file_bytes.len());
+        println!("[DEBUG] Archivo '{}' enviado exitosamente ({} bytes)", file.name, file_bytes.len());
     }
 
     let success_msg = format!("{} archivo(s) enviados correctamente a {}", args.files.len(), addr);
