@@ -83,6 +83,20 @@ function TransmitterView({ onBack }) {
         setCurrentFileIndex(0);
     };
 
+    // Función auxiliar para convertir archivo a base64
+    const fileToBase64 = (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => {
+                // Eliminar el prefijo "data:*/*;base64,"
+                const base64 = reader.result.split(',')[1];
+                resolve(base64);
+            };
+            reader.onerror = error => reject(error);
+        });
+    };
+
     const handleStartTransfer = async () => {
         if (files.length === 0) {
             await invoke("write_log_entry", { 
@@ -128,19 +142,28 @@ function TransmitterView({ onBack }) {
             let successCount = 0;
             let failCount = 0;
             
-            for (let i = 0; i < filePaths.length; i++) {
+            for (let i = 0; i < files.length; i++) {
                 setCurrentFileIndex(i);
-                const fileName = files[i].name;
+                const fileObj = files[i];
+                const fileName = fileObj.name;
                 
                 try {
                     await invoke("write_log_entry", { 
                         message: `📤 [${i + 1}/${files.length}] Transfiriendo: ${fileName}` 
                     });
                     
+                    // Convertir el archivo a base64
+                    const base64Content = await fileToBase64(fileObj.file);
+                    
                     await invoke("start_transfer", {
-                        ip,
-                        protocol,
-                        files: [filePaths[i]],
+                        args: {
+                            ip,
+                            protocol,
+                            files: [{
+                                name: fileName,
+                                content_base64: base64Content
+                            }]
+                        }
                     });
                     
                     await invoke("write_log_entry", { 
@@ -234,7 +257,7 @@ function TransmitterView({ onBack }) {
                 />
                 
                 {/* Barra de progreso global - Overlay */}
-                {(isTransferring || (transferComplete && transferHadErrors)) && (
+                {(isTransferring || transferComplete) && (
                     <div 
                         className="absolute inset-0 flex items-center justify-center"
                         style={{
@@ -256,8 +279,10 @@ function TransmitterView({ onBack }) {
                                 <span className="text-base font-semibold text-white">
                                     {isTransferring ? (
                                         <>📤 Transfiriendo archivo {currentFileIndex + 1} de {files.length}</>
-                                    ) : (
+                                    ) : transferHadErrors ? (
                                         <>⚠️ Transferencia completada con errores</>
+                                    ) : (
+                                        <>✅ Transferencia completada exitosamente</>
                                     )}
                                 </span>
                                 {isTransferring && (
@@ -285,10 +310,15 @@ function TransmitterView({ onBack }) {
                                     </div>
                                 </>
                             )}
-                            {!isTransferring && transferHadErrors && (
+                            {!isTransferring && transferComplete && (
                                 <>
-                                    <div className="mt-3 text-sm text-red-400 text-center font-medium">
-                                        Algunos archivos no pudieron ser transferidos. Revisa el log para más detalles.
+                                    <div className={`mt-3 text-sm text-center font-medium ${
+                                        transferHadErrors ? 'text-red-400' : 'text-green-400'
+                                    }`}>
+                                        {transferHadErrors 
+                                            ? 'Algunos archivos no pudieron ser transferidos. Revisa el log para más detalles.'
+                                            : 'Todos los archivos se transfirieron correctamente.'
+                                        }
                                     </div>
                                     <div className="flex justify-end mt-4">
                                         <button
