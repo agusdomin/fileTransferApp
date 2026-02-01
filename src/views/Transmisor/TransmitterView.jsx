@@ -142,9 +142,8 @@ function TransmitterView({ onBack }) {
             let successCount = 0;
             let failCount = 0;
             
-            for (let i = 0; i < files.length; i++) {
-                setCurrentFileIndex(i);
-                const fileObj = files[i];
+            files.forEach(async (fileObj, index) => {
+                setCurrentFileIndex(index);
                 const fileName = fileObj.name;
                 
                 try {
@@ -178,8 +177,8 @@ function TransmitterView({ onBack }) {
                 }
                 
                 // Actualizar progreso
-                setTransferProgress(((i + 1) / files.length) * 100);
-            }
+                setTransferProgress(((index + 1) / files.length) * 100);
+            });
             
             // Log final
             await invoke("write_log_entry", { 

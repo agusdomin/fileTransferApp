@@ -37,7 +37,7 @@ function ReceiverView({ onBack }) {
 
   const handleStartReceiver = async () => {
       try { 
-        const result = await invoke("start_receiver", { savePath: "C:\\Users\\agust\\OneDrive\\Documentos\\archivosAppRecibidosss" });
+        const result = await invoke("start_receiver", { savePath: "C:\\Usuarios\\Agustin\\Documentos\\archivosRecibidos" });
         setLog(result);
       } catch (error) {
       setLog(`Error: ${error}`);

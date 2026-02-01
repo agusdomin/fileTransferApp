@@ -10,6 +10,10 @@ use std::sync::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::BufWriter;
 use chrono::Local;
+use md5;
+use sha2::{Sha256, Digest as Sha2Digest};
+use sha3::{Sha3_256, Digest as Sha3Digest};
+use crc32fast::Hasher;
 
 // Estado global del archivo de log
 struct LogState {
@@ -172,114 +176,184 @@ async fn start_transfer(log_state: tauri::State<'_, Mutex<LogState>>, args: Tran
         write_log(&log_state, &format!("✗ {}", error_msg));
         return Err(error_msg);
     }
-    if args.protocol.to_uppercase() != "TCP" {
-        let error_msg = "Por ahora solo se soporta TCP".to_string();
-        write_log(&log_state, &format!("✗ {}", error_msg));
-        return Err(error_msg);
-    }
 
     let ip = &args.ip;
     let port = 4000; // Puerto fijo para ejemplo
     let addr = format!("{}:{}", ip, port);
 
-    use std::io::Write;
-    use std::net::TcpStream;
-    use std::time::Duration;
+    use std::io::Write; // para realizar operaciones de escritura en tipos que lo implementan, como File, TcpStream, o BufWriter.
+    use std::net::TcpStream; // socket TCP
+    use std::net::UdpSocket; // Socket UDP
+    use std::time::Duration;    
     
-    println!("[DEBUG] Intentando conectar a {}...", addr);
-    write_log(&log_state, &format!("Intentando conectar a {}...", addr));
+
+    if args.protocol.to_uppercase() == "TCP" {
+        // let error_msg = "Por ahora solo se soporta TCP".to_string();
+        // write_log(&log_state, &format!("✗ {}", error_msg));
+        // return Err(error_msg);
     
-    let mut stream = match TcpStream::connect_timeout(
-        &addr.parse::<std::net::SocketAddr>().map_err(|e| {
-            let error_msg = format!("Dirección inválida {}: {}", addr, e);
-            write_log(&log_state, &format!("✗ {}", error_msg));
-            println!("[DEBUG] {}", error_msg);
-            error_msg
-        })?,
-        Duration::from_secs(10)
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            let error_msg = format!("No se pudo conectar a {}: {}", addr, e);
-            write_log(&log_state, &format!("✗ {}", error_msg));
-            println!("[DEBUG] {}", error_msg);
-            return Err(error_msg);
-        }
-    };
-
-    // Configurar timeouts para operaciones de lectura/escritura
-    stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-
-    println!("[DEBUG] Conexión establecida exitosamente");
-    write_log(&log_state, "✓ Conexión establecida");
-
-    for file in &args.files {
-        println!("[DEBUG] Procesando archivo: {} ({} bytes base64)", file.name, file.content_base64.len());
-        write_log(&log_state, &format!("Enviando archivo: {}", file.name));
+        println!("[DEBUG] Intentando establecer conexión TCP a {}...", addr);
+        write_log(&log_state, &format!("Intentando establecer conexión TCP a {}...", addr));
         
-        let file_bytes = match base64::decode(&file.content_base64) {
-            Ok(b) => {
-                println!("[DEBUG] Archivo decodificado: {} bytes reales", b.len());
-                b.to_vec()
-            },
-            Err(e) => {
-                let error_msg = format!("No se pudo decodificar el archivo base64: {}", e);
+        let mut stream = match TcpStream::connect_timeout( // Try/catch para manejar la conexión TCP
+            &addr.parse::<std::net::SocketAddr>().map_err(|e| {
+                let error_msg = format!("Dirección inválida {}: {}", addr, e);
+                write_log(&log_state, &format!("✗ {}", error_msg));
+                println!("[DEBUG] {}", error_msg);
+                error_msg
+            })?, // Parsear la dirección IP y puerto a SocketAddr, es lo que espera TcpStream, si falla logea el eeror
+            Duration::from_secs(10) // Este es el tiempo de espera del connection_timeout
+        ) {
+            Ok(s) => s, // Si esta OK, devuelve el stream, es decir la conexión fue exitosa
+            Err(e) => { // Sino, logea el error, la conexión falló
+                let error_msg = format!("No se pudo conectar a {}: {}", addr, e);
                 write_log(&log_state, &format!("✗ {}", error_msg));
                 println!("[DEBUG] {}", error_msg);
                 return Err(error_msg);
-            },
+            }
         };
-        
-        // Enviar primero la longitud del nombre de archivo (2 bytes, big endian), luego el nombre, luego el tamaño (8 bytes), luego el archivo
-        let file_name_bytes = file.name.as_bytes();
-        let name_len = file_name_bytes.len();
-        if name_len > u16::MAX as usize {
-            return Err("Nombre de archivo demasiado largo".to_string());
-        }
-        
-        println!("[DEBUG] Enviando metadata del archivo...");
-        let name_len_bytes = (name_len as u16).to_be_bytes();
-        let file_size_bytes = (file_bytes.len() as u64).to_be_bytes();
-        
-        stream.write_all(&name_len_bytes).map_err(|e| {
-            let error_msg = format!("Error enviando longitud de nombre: {}", e);
-            println!("[DEBUG] {}", error_msg);
-            error_msg
-        })?;
-        
-        stream.write_all(file_name_bytes).map_err(|e| {
-            let error_msg = format!("Error enviando nombre de archivo: {}", e);
-            println!("[DEBUG] {}", error_msg);
-            error_msg
-        })?;
-        
-        stream.write_all(&file_size_bytes).map_err(|e| {
-            let error_msg = format!("Error enviando tamaño de archivo: {}", e);
-            println!("[DEBUG] {}", error_msg);
-            error_msg
-        })?;
-        
-        println!("[DEBUG] Enviando datos del archivo ({} bytes)...", file_bytes.len());
-        stream.write_all(&file_bytes).map_err(|e| {
-            let error_msg = format!("Error enviando datos: {}", e);
-            println!("[DEBUG] {}", error_msg);
-            error_msg
-        })?;
-        
-        stream.flush().map_err(|e| {
-            let error_msg = format!("Error haciendo flush: {}", e);
-            println!("[DEBUG] {}", error_msg);
-            error_msg
-        })?;
-        
-        write_log(&log_state, &format!("✓ Archivo '{}' enviado ({} bytes)", file.name, file_bytes.len()));
-        println!("[DEBUG] Archivo '{}' enviado exitosamente ({} bytes)", file.name, file_bytes.len());
-    }
 
-    let success_msg = format!("{} archivo(s) enviados correctamente a {}", args.files.len(), addr);
-    write_log(&log_state, &format!("✓ {}", success_msg));
-    Ok(success_msg)
+        // Configurar timeouts para operaciones de lectura/escritura
+        stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
+        stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+
+        println!("[DEBUG] Conexión establecida exitosamente");
+        write_log(&log_state, "✓ Conexión establecida");
+
+        for file in &args.files {
+            println!("[DEBUG] Procesando archivo: {} ({} bytes base64)", file.name, file.content_base64.len());
+            write_log(&log_state, &format!("Enviando archivo: {}", file.name));
+            
+            let file_bytes = match base64::decode(&file.content_base64) {
+                Ok(b) => {
+                    println!("[DEBUG] Archivo decodificado: {} bytes reales", b.len());
+                    b.to_vec()
+                },
+                Err(e) => {
+                    let error_msg = format!("No se pudo decodificar el archivo base64: {}", e);
+                    write_log(&log_state, &format!("✗ {}", error_msg));
+                    println!("[DEBUG] {}", error_msg);
+                    return Err(error_msg);
+                },
+            };
+            
+            // Enviar primero la longitud del nombre de archivo (2 bytes, big endian), luego el nombre, luego el tamaño (8 bytes), luego el archivo
+            let file_name_bytes = file.name.as_bytes();
+            let name_len = file_name_bytes.len();
+            if name_len > u16::MAX as usize {
+                return Err("Nombre de archivo demasiado largo".to_string());
+            }
+            
+            println!("[DEBUG] Enviando metadata del archivo...");
+            let name_len_bytes = (name_len as u16).to_be_bytes();
+            let file_size_bytes = (file_bytes.len() as u64).to_be_bytes();
+            
+            stream.write_all(&name_len_bytes).map_err(|e| {
+                let error_msg = format!("Error enviando longitud de nombre: {}", e);
+                println!("[DEBUG] {}", error_msg);
+                error_msg
+            })?;
+            
+            stream.write_all(file_name_bytes).map_err(|e| {
+                let error_msg = format!("Error enviando nombre de archivo: {}", e);
+                println!("[DEBUG] {}", error_msg);
+                error_msg
+            })?;
+            
+            stream.write_all(&file_size_bytes).map_err(|e| {
+                let error_msg = format!("Error enviando tamaño de archivo: {}", e);
+                println!("[DEBUG] {}", error_msg);
+                error_msg
+            })?;
+            
+            println!("[DEBUG] Enviando datos del archivo ({} bytes)...", file_bytes.len());
+            stream.write_all(&file_bytes).map_err(|e| {
+                let error_msg = format!("Error enviando datos: {}", e);
+                println!("[DEBUG] {}", error_msg);
+                error_msg
+            })?;
+            
+            stream.flush().map_err(|e| {
+                let error_msg = format!("Error haciendo flush: {}", e);
+                println!("[DEBUG] {}", error_msg);
+                error_msg
+            })?;
+            
+            write_log(&log_state, &format!("✓ Archivo '{}' enviado ({} bytes)", file.name, file_bytes.len()));
+            println!("[DEBUG] Archivo '{}' enviado exitosamente ({} bytes)", file.name, file_bytes.len());
+        }
+
+        let success_msg = format!("{} archivo(s) enviados correctamente a {}", args.files.len(), addr);
+        write_log(&log_state, &format!("✓ {}", success_msg));
+        Ok(success_msg)
+    } else if args.protocol.to_uppercase() == "UDP" {
+        // Crear un socket UDP
+        // let mut socket = UdpSocket::bind("0.0.0.0:0")?;
+        let socket = match UdpSocket::bind("0.0.0.0:0") {  // Asociar a cualquier dirección local y puerto efímero
+            Ok(s) => s, // Si es Ok, obtenemos el UdpSocket
+            Err(e) => {
+                println!("Error al crear el socket UDP: {}", e);
+                return Err(format!("Error al crear el socket UDP: {}", e));
+            }
+        };
+        socket.connect(&addr); // Conectar al destino remoto
+
+        println!("[DEBUG] Conectado a {} por UDP", addr);
+        write_log(&log_state, &format!("Conectado a {} por UDP", addr));
+
+        for file in &args.files {
+            println!("[DEBUG] Procesando archivo: {} ({} bytes base64)", file.name, file.content_base64.len());
+            write_log(&log_state, &format!("Enviando archivo: {}", file.name));
+
+            // Decodificar el contenido del archivo desde base64
+            let file_bytes = match base64::decode(&file.content_base64) {
+                Ok(b) => b,
+                Err(e) => {
+                    let error_msg = format!("No se pudo decodificar el archivo base64: {}", e);
+                    write_log(&log_state, &format!("✗ {}", error_msg));
+                    println!("[DEBUG] {}", error_msg);
+                    return Err(error_msg);
+                },
+            };
+
+            // Preparar los datos a bytes para enviarlos en el paquete
+            let file_name_bytes = file.name.as_bytes();
+            let name_len = file_name_bytes.len();
+            if name_len > u16::MAX as usize {
+                return Err("Nombre de archivo demasiado largo".to_string());
+            }            
+            let name_len_bytes = (name_len as u16).to_be_bytes(); // Longitud del nombre (2 bytes)
+            let file_size_bytes = (file_bytes.len() as u64).to_be_bytes(); // Tamaño del archivo (8 bytes)
+
+            // Combinar todos los datos en un solo buffer (paquete)
+            let mut packet = Vec::new();
+            packet.extend_from_slice(&name_len_bytes); // Longitud del nombre
+            packet.extend_from_slice(file_name_bytes); // Nombre del archivo
+            packet.extend_from_slice(&file_size_bytes); // Tamaño del archivo
+            packet.extend_from_slice(&file_bytes); // Contenido del archivo
+
+            // Enviar el paquete por UDP
+            match socket.send(&packet) { 
+                Ok(bytes_sent) => {
+                    println!("[DEBUG] Archivo '{}' enviado exitosamente ({} bytes)", file.name, bytes_sent);
+                    write_log(&log_state, &format!("✓ Archivo '{}' enviado ({} bytes)", file.name, bytes_sent));
+                },
+                Err(e) => {
+                    let error_msg = format!("Error enviando archivo '{}': {}", file.name, e);
+                    write_log(&log_state, &format!("✗ {}", error_msg));
+                    println!("[DEBUG] {}", error_msg);
+                    return Err(error_msg);
+                },
+            }
+        };
+        let success_msg = format!("{} archivo(s) enviados correctamente a {}", args.files.len(), addr);
+        write_log(&log_state, &format!("✓ {}", success_msg));
+        Ok(success_msg)
+    } else {
+        let error_msg = format!("Protocolo no soportado: {}", args.protocol);
+        write_log(&log_state, &format!("✗ {}", error_msg));
+        Err(error_msg)
+    }
 }
 use ping::ping;
 use std::net::IpAddr;
@@ -348,6 +422,69 @@ fn ping_ip(log_state: tauri::State<Mutex<LogState>>, ip: String) -> Result<Strin
     }
 }
 
+// Función para calcular el hash MD5 de un archivo
+#[tauri::command]
+fn calcular_md5(file_path: &str) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::{BufReader, Read};
+
+    let file = File::open(file_path).map_err(|e| format!("Error abriendo archivo: {}", e))?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).map_err(|e| format!("Error leyendo archivo: {}", e))?;
+    let digest = md5::compute(buffer);
+    Ok(format!("{:x}", digest))
+}
+
+// Función para calcular el hash SHA-256 de un archivo
+#[tauri::command]
+fn calcular_sha256(file_path: &str) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::{BufReader, Read};
+
+    let file = File::open(file_path).map_err(|e| format!("Error abriendo archivo: {}", e))?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).map_err(|e| format!("Error leyendo archivo: {}", e))?;
+    let mut hasher = Sha256::new();
+    hasher.update(buffer);
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
+}
+
+// Función para calcular el hash SHA-3 de un archivo
+#[tauri::command]
+fn calcular_sha3_256(file_path: &str) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::{BufReader, Read};
+
+    let file = File::open(file_path).map_err(|e| format!("Error abriendo archivo: {}", e))?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).map_err(|e| format!("Error leyendo archivo: {}", e))?;
+    let mut hasher = Sha3_256::new();
+    hasher.update(buffer);
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
+}
+
+// Función para calcular el hash CRC32 de un archivo
+#[tauri::command]
+fn calcular_crc32(file_path: &str) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::{BufReader, Read};
+    use crc32fast::Hasher;
+
+    let file = File::open(file_path).map_err(|e| format!("Error abriendo archivo: {}", e))?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).map_err(|e| format!("Error leyendo archivo: {}", e))?;
+    let mut hasher = Hasher::new();
+    hasher.update(&buffer);
+    let checksum = hasher.finalize();
+    Ok(format!("{:x}", checksum))
+}
+
 fn main() {
     let log_state = Mutex::new(LogState::new());
     
@@ -360,7 +497,11 @@ fn main() {
             start_receiver,
             write_log_entry,
             read_logs,
-            get_log_file_path
+            get_log_file_path,
+            calcular_md5,
+            calcular_sha256,
+            calcular_sha3_256,
+            calcular_crc32
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
