@@ -1,19 +1,64 @@
 import React, { useState, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from '@tauri-apps/plugin-dialog';
+import { stat, readFile } from '@tauri-apps/plugin-fs';
 
-export default function PanelArchivos({ files, setFiles }) {
+export default function PanelArchivos({ files, algoritmoChecksum ,setFiles }) {
+    
     const fileInputRef = useRef(null);
     const [uploadProgress, setUploadProgress] = useState({});
 
-    const handleAddFiles = (e) => {
-        if (e.target.files) {
-            const newFiles = Array.from(e.target.files).map((file, index) => ({
-                id: Date.now() + index,
-                file: file,
-                name: file.name,
-                size: formatFileSize(file.size),
-                path: file.path || file.name,
-                loading: false
+    // Función auxiliar para convertir archivo a base64
+    const fileToBase64 = (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => {
+                // Eliminar el prefijo "data:*/*;base64,"
+                const base64 = reader.result.split(',')[1];
+                resolve(base64);
+            };
+            reader.onerror = error => reject(error);
+        });
+    };  
+
+    const handleAddFiles = async (e) => {
+        const selected = await open({
+            multiple: true,
+            directory: false
+        });
+        
+        if (selected && selected.length > 0) {
+            const newFiles = await Promise.all(selected.map(async (filePath, index) => {
+                
+                // Obtener metadatos del archivo
+                const fileStats = await stat(filePath);
+                const fileContent = await readFile(filePath);
+                const base64Content = await fileToBase64(new File([fileContent], filePath.split('\\').pop().split('/').pop()));
+
+                // Calcular checksum segun el algoritmo
+                const hash = await invoke("calcular_checksum", {
+                    filePath: filePath,
+                    algoritmo: algoritmoChecksum
+                }).catch(err => {
+                    console.error("Error al calcular checksum:", err);
+                    return null;
+                });
+
+                // Extraer nombre del archivo desde la ruta
+                const fileName = filePath.split('\\').pop().split('/').pop();
+
+                return {
+                    id: Date.now() + index,
+                    name: fileName,
+                    size: formatFileSize(fileStats.size),
+                    base64Content: base64Content,
+                    path: filePath,
+                    loading: false,
+                    checksum: hash
+                };
             }));
+
             setFiles([...files, ...newFiles]);
             
             // Simular proceso de carga
@@ -21,7 +66,6 @@ export default function PanelArchivos({ files, setFiles }) {
                 simulateUpload(fileObj.id);
             });
         }
-        e.target.value = '';
     };
 
     const simulateUpload = (fileId) => {
@@ -73,20 +117,20 @@ export default function PanelArchivos({ files, setFiles }) {
             <h3 className="text-xl font-bold mb-4 text-center">Archivos Seleccionados</h3>
             
             <button 
-                onClick={handleButtonClick}
+                onClick={handleAddFiles}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold mb-4 hover:bg-blue-700 transition-colors"
             >
                 + Agregar Archivos
             </button>
             
-            <input 
+            {/* <input 
                 ref={fileInputRef}
                 type="file" 
                 multiple 
                 onChange={handleAddFiles}
                 className="hidden"
             />
-            
+             */}
             <div 
                 className="overflow-y-auto space-y-3"
                 style={{ 
@@ -130,9 +174,14 @@ export default function PanelArchivos({ files, setFiles }) {
                                     }}
                                 ></div>
                             </div>
-                            <p className="text-xs text-gray-400 mt-1 text-right">
-                                {uploadProgress[fileObj.id] || 0}%
-                            </p>
+                            <div className="flex flex-row justify-between">
+                                <p className="text-xs text-gray-400 mt-1 text-right">
+                                    Checksum asociado: {fileObj.checksum || 'N/A'}
+                                </p>
+                                <p className="text-xs text-gray-400 mt-1 text-right">
+                                    {uploadProgress[fileObj.id] || 0}%
+                                </p>
+                            </div>
                         </div>
                     ))
                 )}

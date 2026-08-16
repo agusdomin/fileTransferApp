@@ -1,24 +1,99 @@
 import { invoke } from "@tauri-apps/api/core";
-import React, { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import React, { useEffect, useState, useRef } from "react";
 
 function ReceiverView({ onBack }) { 
 
   const [ip, setIp] = useState("");
+  const [destinationFolder, setDestinationFolder] = useState("");
+  const [protocol, setProtocol] = useState("TCP");
+  const [receivedFiles, setReceivedFiles] = useState([]);
+  const [log, setLog] = useState("");
+  const [pingExitoso, setPingExitoso] = useState(null);
+  const [isReceiverActive, setIsReceiverActive] = useState(false);
+  const logEndRef = useRef(null);
 
   async function getIpAndSet() {
     const ip = await invoke("get_local_ip");
-    setIp(ip); // setIp es tu useState setter
+    setIp(ip);
   } 
   
   // Llamada en un useEffect:
   useEffect(() => {
     getIpAndSet();
   }, []);
-  
-  const [protocol, setProtocol] = useState("TCP");
-  const [files, setFiles] = useState([]);
-  const [log, setLog] = useState("");
-  const [pingExitoso, setPingExitoso] = useState(null);
+
+  // Escuchar eventos de archivos recibidos desde el backend
+  useEffect(() => {
+    let active = true;
+    let unlisten = null;
+    listen("file_received", (event) => {
+      if (!active) return;
+      const file = event.payload;
+      setReceivedFiles(prev => [...prev, {
+        id: Date.now() + Math.random(),
+        name: file.name,
+        extension: file.extension,
+        size: file.size,
+        path: file.path,
+        status: file.checksum_valid ? "OK" : "ERROR",
+        checksumValid: file.checksum_valid,
+      }]);
+    }).then(fn => {
+      if (active) {
+        unlisten = fn;
+      } else {
+        fn(); // efecto ya fue desmontado, desregistrar inmediatamente
+      }
+    });
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Leer logs automáticamente cada 2 segundos
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const logs = await invoke("read_logs");
+        setLog(logs);
+      } catch (err) {
+        console.error("Error leyendo logs:", err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto-scroll del log
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [log]);
+
+  // Función para seleccionar carpeta destino
+  const handleSelectFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Seleccionar carpeta de destino"
+      });
+      
+      if (selected) {
+        setDestinationFolder(selected);
+      }
+    } catch (error) {
+      console.error("Error al seleccionar carpeta:", error);
+    }
+  };
+
+  // Verificar si el botón debe estar habilitado
+  const isButtonEnabled = ip.trim() !== "" && destinationFolder.trim() !== "";
 
   const testPing = async (ip) => { 
       try {
@@ -29,23 +104,56 @@ function ReceiverView({ onBack }) {
       }
   };
 
-  // const handleFileChange = (e) => {
-  //     if (e.target.files) {
-  //     setFiles(Array.from(e.target.files));
-  //     }
-  // };
+  const handleStopReceiver = async () => {
+    try {
+      await invoke("stop_receiver");
+      setIsReceiverActive(false);
+    } catch (error) {
+      console.error("Error al detener el receptor:", error);
+    }
+  };
 
   const handleStartReceiver = async () => {
-      try { 
-        const result = await invoke("start_receiver", { savePath: "C:\\Usuarios\\Agustin\\Documentos\\archivosRecibidos" });
-        setLog(result);
+      try {
+        setIsReceiverActive(true);
+        const result = await invoke("start_receiver", { savePath: destinationFolder });
+        setLog(prevLog => prevLog + `\n✓ ${result}`);
+        
+        // Simulación: agregar archivo recibido (esto debería venir del backend)
+        // TODO: Implementar escucha de eventos desde Rust para agregar archivos
+        // setReceivedFiles(prev => [...prev, { 
+        //   id: Date.now(), 
+        //   name: "ejemplo.txt", 
+        //   extension: "txt", 
+        //   status: "OK",
+        //   checksumValid: true
+        // }]);
       } catch (error) {
-      setLog(`Error: ${error}`);
+        setLog(prevLog => prevLog + `\n✗ Error: ${error}`);
+        setIsReceiverActive(false);
       }
   };
+
+  // Función para obtener el icono según el estado
+  const getStatusIcon = (status, checksumValid) => {
+    if (status === "ERROR" || checksumValid === false) {
+      return "✗";
+    }
+    return "✓";
+  };
+
+  // Función para obtener el color según el estado
+  const getStatusColor = (status, checksumValid) => {
+    if (status === "ERROR" || checksumValid === false) {
+      return "text-red-500";
+    }
+    return "text-green-500";
+  };
+
   return (
-     <div className="flex flex-col justify-center">
-            <div className="flex flex-row items-center gap-4 mb-6"> 
+     <div className="flex flex-col h-screen w-full px-8 py-4">
+            {/* Header */}
+            <div className="flex flex-row items-center gap-4 mb-4"> 
                 <div className="flex-1 flex justify-start">
                     <button
                         className="cursor-pointer scale-100 transition-transform duration-200 hover:scale-120"
@@ -59,48 +167,167 @@ function ReceiverView({ onBack }) {
                 </div>
                 <div className="flex-1"></div>
             </div>
-            <div 
-                className="flex flex-col justify-center items-center border-2 p-20 mb-4 mt-4 rounded-2xl border-white mx-auto"
-                style={{
-                    boxShadow: "0 12px 32px 0 rgba(0,0,0,0.7), 0 1.5px 0 0 rgba(255,255,255,0.08) inset",
-                    zIndex: 1,
-                }}
-            >
-                <div className="flex flex-col items-center mb-4">
-                    <div className="flex flex-col items-start">
-                        <label className="block mb-2 text-lg">IP del receptor</label> 
-                        <input
-                            type="text"
-                            value={ip}
-                            disabled
-                            className="px-4 py-2 border rounded w-64"
-                            placeholder="Ej: 192.168.1.100"
-                        /> 
+
+            {/* Contenido principal en dos columnas */}
+            <div className="flex flex-row gap-4 flex-1 min-h-0 overflow-hidden">
+                {/* COLUMNA IZQUIERDA: Configuración + Log */}
+                <div className="flex flex-col w-1/2 gap-4 min-h-0">
+                    {/* Panel de Configuración */}
+                    <div 
+                        className="flex flex-col border-2 p-4 rounded-2xl border-white"
+                        style={{
+                            boxShadow: "0 12px 32px 0 rgba(0,0,0,0.7), 0 1.5px 0 0 rgba(255,255,255,0.08) inset",
+                            zIndex: 1,
+                        }}
+                    >
+                        <h3 className="text-lg font-bold mb-3 text-center">Configuración</h3>
+                        
+                        <div className="flex flex-col mb-3">
+                            <label className="block mb-1 text-sm">IP del receptor</label> 
+                            <input
+                                type="text"
+                                value={ip}
+                                disabled
+                                className="px-3 py-2 border rounded bg-gray-100 text-gray-700 text-sm"
+                                placeholder="Cargando..."
+                            /> 
+                        </div>
+                        
+                        <div className="flex flex-col mb-3">
+                            <label className="block mb-1 text-sm">Carpeta de destino</label>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={destinationFolder}
+                                    disabled
+                                    className="px-3 py-2 border rounded flex-1 bg-gray-100 text-gray-700 text-xs"
+                                    placeholder="Seleccionar carpeta..."
+                                />
+                                <button
+                                    onClick={handleSelectFolder}
+                                    className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
+                                    title="Seleccionar carpeta"
+                                >
+                                    📁
+                                </button>
+                            </div>
+                        </div>
+
+                        {isReceiverActive ? (
+                            <button
+                                className="px-4 py-2 text-white rounded-lg font-semibold transition-all text-sm bg-red-600 hover:bg-red-700 cursor-pointer"
+                                onClick={handleStopReceiver}
+                            >
+                                Desconectar receptor
+                            </button>
+                        ) : (
+                            <button 
+                                className={`px-4 py-2 text-white rounded-lg font-semibold transition-all text-sm ${
+                                    isButtonEnabled 
+                                        ? 'bg-blue-600 hover:bg-blue-700 cursor-pointer' 
+                                        : 'bg-gray-400 cursor-not-allowed opacity-50'
+                                }`}
+                                onClick={handleStartReceiver}
+                                disabled={!isButtonEnabled}
+                            >
+                                Activar receptor
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Panel de Log */}
+                    <div 
+                        className="flex flex-col border-2 p-4 rounded-2xl border-white flex-1 min-h-0"
+                        style={{
+                            boxShadow: "0 12px 32px 0 rgba(0,0,0,0.7), 0 1.5px 0 0 rgba(255,255,255,0.08) inset",
+                            zIndex: 1,
+                        }}
+                    >
+                        <h3 className="text-lg font-bold mb-3 text-center">Log</h3>
+                        <div 
+                            className="bg-black text-green-400 font-mono text-xs p-3 rounded-lg overflow-y-auto flex-1"
+                        >
+                            {!log || log.trim() === "" ? (
+                                <div className="text-gray-500">Esperando actividad...</div>
+                            ) : (
+                                log.split('\n').map((line, index) => (
+                                    <div 
+                                        key={index} 
+                                        className={`mb-1 ${
+                                            line.includes('✓') ? 'text-green-400' : 
+                                            line.includes('✗') ? 'text-red-400' : 
+                                            line.includes('===') ? 'text-cyan-400 font-bold' : 
+                                            'text-green-400'
+                                        }`}
+                                    >
+                                        {line}
+                                    </div>
+                                ))
+                            )}
+                            <div ref={logEndRef} />
+                        </div>
                     </div>
                 </div>
-                <div className="flex-col items-start mb-6">
-                    <label className="block mb-2 text-lg">Socket</label>
-                    {/* <select
-                        value={protocol}
-                        onChange={e => setProtocol(e.target.value)}
-                        className="px-4 py-2 border rounded w-64"
+
+                {/* COLUMNA DERECHA: Archivos recibidos */}
+                <div className="flex flex-col w-1/2 min-h-0">
+                    <div 
+                        className="flex flex-col border-2 p-4 rounded-2xl border-white h-full min-h-0"
+                        style={{
+                            boxShadow: "0 12px 32px 0 rgba(0,0,0,0.7), 0 1.5px 0 0 rgba(255,255,255,0.08) inset",
+                            zIndex: 1,
+                        }}
                     >
-                        <option value="TCP">TCP</option>
-                        <option value="UDP">UDP</option>
-                    </select> */}
+                        <h3 className="text-lg font-bold mb-3 text-center">Archivos recibidos</h3>
+
+                        {receivedFiles.some(f => f.checksumValid) && (
+                            <button
+                                onClick={() => openPath(destinationFolder).catch(err => console.error("Error abriendo carpeta:", err))}
+                                className="px-4 py-2 mb-3 bg-green-700 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                            >
+                                📂 Ver archivos recibidos
+                            </button>
+                        )}
+
+                        <div className="overflow-y-auto flex-1 min-h-0">
+                            {receivedFiles.length === 0 ? (
+                                <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+                                    <p>No se han recibido archivos aún</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {receivedFiles.map((file) => (
+                                        <div 
+                                            key={file.id}
+                                            onClick={() => file.checksumValid && openPath(file.path).catch(err => console.error("Error abriendo archivo:", err))}
+                                            className={`flex items-center justify-between p-3 bg-gray-800 rounded-lg border border-gray-700 transition-colors ${
+                                                file.checksumValid
+                                                    ? 'hover:border-green-500 hover:bg-gray-700 cursor-pointer'
+                                                    : 'hover:border-gray-600'
+                                            }`}
+                                            title={file.checksumValid ? "Abrir archivo" : undefined}
+                                        >
+                                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                                                <div className="text-xl">
+                                                    📄
+                                                </div>
+                                                <div className="flex flex-col flex-1 min-w-0">
+                                                    <span className="font-semibold truncate text-sm">{file.name}</span>
+                                                    <span className="text-xs text-gray-400">.{file.extension}</span>
+                                                </div>
+                                            </div>
+                                            <div className={`flex items-center gap-2 font-bold text-sm ${getStatusColor(file.status, file.checksumValid)}`}>
+                                                <span>{getStatusIcon(file.status, file.checksumValid)}</span>
+                                                <span>{file.checksumValid === false ? "ERROR" : "OK"}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
-                <div className="mb-6">
-                    <label className="block mb-2 text-lg">Archivos recibidos:</label>
-                    {/* <input type="file" multiple onChange={handleFileChange} className="mb-2" />
-                    <ul>
-                        {files.map((file) => (
-                            <li key={file.name}>{file.name}</li>
-                        ))}
-                    </ul> */}
-                </div>
-            </div>    
-            <button className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold mb-4" onClick={handleStartReceiver}>Activar receptor</button>
-            <p className="text-gray-700 mt-2">{log}</p>
+            </div>
         </div>
   );
 }

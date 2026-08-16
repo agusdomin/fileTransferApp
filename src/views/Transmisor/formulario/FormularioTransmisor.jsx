@@ -1,17 +1,37 @@
 import React, { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-    
 
-export default function FormularioTransmisor({ip,setIp,protocol,setProtocol,files,setFiles,testPing,pingExitoso,isTestingPing,isTransferring,handleFileChange,handleStartTransfer}) {
+export default function FormularioTransmisor({
+    iniciarTransferencia,
+    files,
+    algoritmoChecksum,
+    setAlgoritmoChecksum,
+    testPing,
+    pingExitoso,
+    isTestingPing,
+    isTransferring,
+    handleFileChange,
+    handleStartTransfer}) {
 
+    const [ip, setIp] = useState("");
+    const [protocol, setProtocol] = useState("TCP"); 
+
+    const handleSubmitForm = (e) => {
+        e.preventDefault();
+        
+        // Pasar los datos del formulario al padre
+        iniciarTransferencia({
+            ip,
+            protocol,
+            algoritmoChecksum
+        });
+    };
     return (
-        <div 
-                className="flex flex-col justify-start items-start border-2 p-4 mb-4 mt-4 rounded-2xl border-white mx-auto"
+        <form 
+        onSubmit={handleSubmitForm}
+                className="flex flex-col justify-start items-start border-2 p-4 mb-4 mt-4 rounded-2xl border-white w-full"
                 style={{
                     boxShadow: "0 12px 32px 0 rgba(0,0,0,0.7), 0 1.5px 0 0 rgba(255,255,255,0.08) inset",
                     zIndex: 1,
-                    maxWidth: "30vw",
-                    minWidth: "30vw"
                 }}
             >
                 <div className="flex flex-row">
@@ -20,6 +40,7 @@ export default function FormularioTransmisor({ip,setIp,protocol,setProtocol,file
                         <input
                             type="text"
                             value={ip}
+                            name="ip"
                             onChange={e => setIp(e.target.value)}
                             className="px-4 py-2 border rounded w-64"
                             placeholder="Ej: 192.168.1.100"
@@ -69,11 +90,25 @@ export default function FormularioTransmisor({ip,setIp,protocol,setProtocol,file
                     <label className="block mb-2 text-lg">Socket</label>
                     <select
                         value={protocol}
+                        name="protocol"
                         onChange={e => setProtocol(e.target.value)}
                         className="px-4 py-2 border rounded w-64"
                     >
                         <option value="TCP">TCP</option>
                         <option value="UDP">UDP</option>
+                    </select>
+                </div>
+                   <div className="flex-col items-start mb-6">
+                    <label className="block mb-2 text-lg">Algoritmo de checksum</label>
+                    <select
+                        value={algoritmoChecksum}
+                        name="algoritmoChecksum"
+                        onChange={e => setAlgoritmoChecksum(e.target.value)}
+                        className="px-4 py-2 border rounded w-64"
+                    >
+                        <option value="MD5">MD5</option>
+                        <option value="SHA1">SHA1</option>
+                        <option value="SHA256">SHA256</option>
                     </select>
                 </div>
                 <button 
@@ -82,7 +117,7 @@ export default function FormularioTransmisor({ip,setIp,protocol,setProtocol,file
                             ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                             : 'bg-blue-600 text-white hover:bg-blue-700'
                     }`}
-                    onClick={handleStartTransfer}
+                    type="submit"
                     disabled={isTransferring || files.length === 0 || !ip}
                 >
                     {isTransferring ? (
@@ -97,8 +132,7 @@ export default function FormularioTransmisor({ip,setIp,protocol,setProtocol,file
                         'Iniciar transferencia'
                     )}
                 </button>
-            </div> 
-
+            </form>  
     )
     
 };
